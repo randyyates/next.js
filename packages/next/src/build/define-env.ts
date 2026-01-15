@@ -173,6 +173,9 @@ export function getDefineEnv({
     'process.env.__NEXT_CACHE_COMPONENTS': isCacheComponentsEnabled,
     'process.env.__NEXT_USE_CACHE': isUseCacheEnabled,
 
+    'process.env.NEXT_IMMUTABLE_ASSET_TOKEN':
+      config.experimental.immutableAssetToken || false,
+
     ...(config.experimental?.useSkewCookie || !config.deploymentId
       ? {
           'process.env.NEXT_DEPLOYMENT_ID': false,

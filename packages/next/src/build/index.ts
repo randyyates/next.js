@@ -992,6 +992,8 @@ export default async function build(
       await installBindings(config.experimental?.useWasmBinary)
 
       process.env.NEXT_DEPLOYMENT_ID = config.deploymentId || ''
+      process.env.NEXT_IMMUTABLE_ASSET_TOKEN =
+        config.experimental.immutableAssetToken || config.deploymentId || ''
       NextBuildContext.config = config
 
       let configOutDir = 'out'
