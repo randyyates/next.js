@@ -84,7 +84,7 @@ async function requestHandler(
     resolvedPathname,
     interceptionRoutePatterns,
     routerServerContext,
-    deploymentId,
+    immutableAssetToken,
   } = prepareResult
 
   // Initialize the cache handlers interface.

@@ -306,7 +306,12 @@ export type PagesSharedContext = {
   /**
    * The deployment ID if the user is deploying to a platform that provides one.
    */
-  deploymentId: string
+  deploymentId: string | undefined
+
+  /**
+   * The deployment ID for static assets if the user is deploying to a platform that provides one.
+   */
+  immutableAssetToken: string | undefined
 
   /**
    * True if the user is using a custom server.
@@ -472,9 +477,9 @@ export async function renderToHTMLImpl(
   }
 
   // if deploymentId is provided we append it to all asset requests
-  if (sharedContext.deploymentId) {
+  if (sharedContext.immutableAssetToken) {
     metadata.assetQueryString += `${metadata.assetQueryString ? '&' : '?'}dpl=${
-      sharedContext.deploymentId
+      sharedContext.immutableAssetToken
     }`
   }
 

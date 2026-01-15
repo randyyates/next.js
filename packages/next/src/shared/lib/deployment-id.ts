@@ -15,9 +15,14 @@ export function getDeploymentId(): string | undefined {
   return deploymentId
 }
 
-export function getDeploymentIdQueryOrEmptyString(): string {
-  if (deploymentId) {
-    return `?dpl=${deploymentId}`
+export function getImmutableAssetToken(): string | undefined {
+  return process.env.NEXT_IMMUTABLE_ASSET_TOKEN || process.env.NEXT_DEPLOYMENT_ID
+}
+
+export function getImmutableAssetTokenQuery(amperstand = false): string {
+  let id = getImmutableAssetToken()
+  if (id) {
+    return `${amperstand ? '&' : '?'}dpl=${id}`
   }
   return ''
 }

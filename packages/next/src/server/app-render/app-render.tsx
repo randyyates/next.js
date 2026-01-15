@@ -257,7 +257,7 @@ export type GenerateFlight = typeof generateDynamicFlightRenderResult
 
 export type AppSharedContext = {
   buildId: string
-  deploymentId: string
+  immutableAssetToken: string
 }
 
 export type AppRenderContext = {

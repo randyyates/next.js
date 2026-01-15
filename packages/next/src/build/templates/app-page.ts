@@ -181,7 +181,7 @@ export async function handler(
     nextConfig,
     parsedUrl,
     interceptionRoutePatterns,
-    deploymentId,
+    immutableAssetToken,
   } = prepareResult
 
   const normalizedSrcPage = normalizeAppPath(srcPage)

@@ -46,7 +46,7 @@ import RootErrorBoundary from './errors/root-error-boundary'
 import DefaultGlobalError from './builtin/global-error'
 import { RootLayoutBoundary } from '../../lib/framework/boundary-components'
 import type { StaticIndicatorState } from '../dev/hot-reloader/app/hot-reloader-app'
-import { getDeploymentIdQueryOrEmptyString } from '../../shared/lib/deployment-id'
+import { getImmutableAssetTokenQuery } from '../../shared/lib/deployment-id'
 
 const globalMutable: {
   pendingMpaPath?: string
@@ -617,7 +617,7 @@ function RuntimeStylesForWebpack() {
     }
   }, [renderedStylesSize, forceUpdate])
 
-  const dplId = getDeploymentIdQueryOrEmptyString()
+  const dplId = getImmutableAssetTokenQuery()
   return [...(runtimeStyles || [])].map((href, i) => (
     <link
       key={i}

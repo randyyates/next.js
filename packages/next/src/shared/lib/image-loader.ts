@@ -1,6 +1,6 @@
 import type { ImageLoaderPropsWithConfig } from './image-config'
 import { findClosestQuality } from './find-closest-quality'
-import { getDeploymentId } from './deployment-id'
+import { getimmutableDeploymentIdQuery } from './deployment-id'
 
 function defaultLoader({
   config,
@@ -111,7 +111,7 @@ function defaultLoader({
   const q = findClosestQuality(quality, config)
 
   return `${config.path}?url=${encodeURIComponent(src)}&w=${width}&q=${q}${
-    src.startsWith('/') && deploymentId ? `&dpl=${deploymentId}` : ''
+    src.startsWith('/') ? `${getimmutableDeploymentIdQuery(true)}` : ''
   }`
 }
 
