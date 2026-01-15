@@ -6,10 +6,14 @@ describe.each([
   ['NEXT_DEPLOYMENT_ID', ''],
   ['CUSTOM_DEPLOYMENT_ID', ''],
   ['NEXT_DEPLOYMENT_ID', ' and runtimeServerDeploymentId'],
+  ['IMMUTABLE_ASSET_TOKEN', ''],
 ])(
   'deployment-id-handling enabled with %s%s',
   (envKey, runtimeServerDeploymentId) => {
     const deploymentId = Date.now() + ''
+    const immutableAssetToken =
+      envKey === 'IMMUTABLE_ASSET_TOKEN' ? `imm-${deploymentId}` : deploymentId
+
     const { next } = nextTestSetup({
       files: join(__dirname, 'app'),
       env: {
@@ -30,14 +34,14 @@ describe.each([
       async ({ urlPath }) => {
         const $ = await next.render$(urlPath)
 
-        expect($('#deploymentId').text()).toBe(deploymentId)
+        expect($('#deploymentId').text()).toBe(immutableAssetToken)
 
         const scripts = Array.from($('script'))
         expect(scripts.length).toBeGreaterThan(0)
 
         for (const script of scripts) {
           if (script.attribs.src) {
-            expect(script.attribs.src).toContain('dpl=' + deploymentId)
+            expect(script.attribs.src).toContain('dpl=' + immutableAssetToken)
           }
         }
 
@@ -47,9 +51,11 @@ describe.each([
         for (const link of links) {
           if (link.attribs.href && link.attribs.rel !== 'expect') {
             if (link.attribs.as === 'font') {
-              expect(link.attribs.href).not.toContain('dpl=' + deploymentId)
+              expect(link.attribs.href).not.toContain(
+                'dpl=' + immutableAssetToken
+              )
             } else {
-              expect(link.attribs.href).toContain('dpl=' + deploymentId)
+              expect(link.attribs.href).toContain('dpl=' + immutableAssetToken)
             }
           }
         }
@@ -69,7 +75,9 @@ describe.each([
 
         try {
           expect(
-            requests.every((item) => item.includes('dpl=' + deploymentId))
+            requests.every((item) =>
+              item.includes('dpl=' + immutableAssetToken)
+            )
           ).toBe(true)
         } finally {
           require('console').error('requests', requests)
@@ -93,7 +101,7 @@ describe.each([
       const browser = await next.browser('/', {
         beforePageLoad(page) {
           page.on('request', async (req) => {
-            const headers = await req.allHeaders()
+            const headers = req.headers()
             if (headers['x-nextjs-data']) {
               dataHeaders.push(headers)
             }
@@ -121,7 +129,7 @@ describe.each([
       const browser = await next.browser('/from-app', {
         beforePageLoad(page) {
           page.on('request', async (req) => {
-            const headers = await req.allHeaders()
+            const headers = req.headers()
             if (headers['rsc']) {
               rscHeaders.push(headers)
             }
