@@ -3,31 +3,42 @@ import { createPromiseWithResolvers } from '../../shared/lib/promise-with-resolv
 
 export enum RenderStage {
   Before = 1,
-  Static = 2,
-  Runtime = 3,
-  Dynamic = 4,
-  Abandoned = 5,
+  EarlyStatic = 2,
+  Static = 3,
+  EarlyRuntime = 4,
+  Runtime = 5,
+  Dynamic = 6,
+  Abandoned = 7,
 }
 
-export type NonStaticRenderStage = RenderStage.Runtime | RenderStage.Dynamic
+export type AdvancableRenderStage =
+  | RenderStage.Static
+  | RenderStage.EarlyRuntime
+  | RenderStage.Runtime
+  | RenderStage.Dynamic
 
 export class StagedRenderingController {
   currentStage: RenderStage = RenderStage.Before
 
   staticInterruptReason: Error | null = null
   runtimeInterruptReason: Error | null = null
+  earlyStaticStageEndTime: number = Infinity
   staticStageEndTime: number = Infinity
+  earlyRuntimeStageEndTime: number = Infinity
   runtimeStageEndTime: number = Infinity
 
+  private staticStageListeners: Array<() => void> = []
+  private earlyRuntimeStageListeners: Array<() => void> = []
   private runtimeStageListeners: Array<() => void> = []
   private dynamicStageListeners: Array<() => void> = []
 
+  private staticStagePromise = createPromiseWithResolvers<void>()
+  private earlyRuntimeStagePromise = createPromiseWithResolvers<void>()
   private runtimeStagePromise = createPromiseWithResolvers<void>()
   private dynamicStagePromise = createPromiseWithResolvers<void>()
 
   constructor(
     private abortSignal: AbortSignal | null = null,
-    private hasRuntimePrefetch: boolean,
     private abandonController: AbortController | null = null
   ) {
     if (abortSignal) {
@@ -39,6 +50,10 @@ export class StagedRenderingController {
           // is a no-op. The ignoreReject handler suppresses unhandled
           // rejection warnings for promises that no one is awaiting.
           const { reason } = abortSignal
+          this.staticStagePromise.promise.catch(ignoreReject)
+          this.staticStagePromise.reject(reason)
+          this.earlyRuntimeStagePromise.promise.catch(ignoreReject)
+          this.earlyRuntimeStagePromise.reject(reason)
           this.runtimeStagePromise.promise.catch(ignoreReject)
           this.runtimeStagePromise.reject(reason)
           this.dynamicStagePromise.promise.catch(ignoreReject)
@@ -59,9 +74,13 @@ export class StagedRenderingController {
     }
   }
 
-  onStage(stage: NonStaticRenderStage, callback: () => void) {
+  onStage(stage: AdvancableRenderStage, callback: () => void) {
     if (this.currentStage >= stage) {
       callback()
+    } else if (stage === RenderStage.Static) {
+      this.staticStageListeners.push(callback)
+    } else if (stage === RenderStage.EarlyRuntime) {
+      this.earlyRuntimeStageListeners.push(callback)
     } else if (stage === RenderStage.Runtime) {
       this.runtimeStageListeners.push(callback)
     } else if (stage === RenderStage.Dynamic) {
@@ -78,10 +97,25 @@ export class StagedRenderingController {
       return false
     }
 
-    const boundaryStage = this.hasRuntimePrefetch
-      ? RenderStage.Dynamic
-      : RenderStage.Runtime
-    return this.currentStage < boundaryStage
+    switch (this.currentStage) {
+      case RenderStage.EarlyStatic:
+      case RenderStage.Static:
+        return true
+      case RenderStage.EarlyRuntime:
+        // EarlyRuntime is for non-prefetch segments that have already
+        // resolved cookies/headers. Sync IO is fine there — it's like
+        // a normal dynamic request.
+        return false
+      case RenderStage.Runtime:
+        // Runtime stage is for prefetch segments. Sync IO should error
+        // because it would abort a runtime prefetch.
+        return true
+      case RenderStage.Dynamic:
+      case RenderStage.Abandoned:
+        return false
+      default:
+        return false
+    }
   }
 
   syncInterruptCurrentStageWithReason(reason: Error) {
@@ -105,22 +139,26 @@ export class StagedRenderingController {
     // If we're in the final render, we cannot abandon it. We need to advance to the Dynamic stage
     // and capture the interruption reason.
     switch (this.currentStage) {
+      case RenderStage.EarlyStatic: {
+        this.staticInterruptReason = reason
+        this.advanceStage(RenderStage.Dynamic)
+        return
+      }
       case RenderStage.Static: {
         this.staticInterruptReason = reason
         this.advanceStage(RenderStage.Dynamic)
         return
       }
+      case RenderStage.EarlyRuntime: {
+        // canSyncInterrupt returns false for EarlyRuntime, so we should
+        // never get here. Defensive no-op.
+        return
+      }
       case RenderStage.Runtime: {
-        // We only error for Sync IO in the runtime stage if the route
-        // is configured to use runtime prefetching.
-        // We do this to reflect the fact that during a runtime prefetch,
-        // Sync IO aborts aborts the render.
-        // Note that `canSyncInterrupt` should prevent us from getting here at all
-        // if runtime prefetching isn't enabled.
-        if (this.hasRuntimePrefetch) {
-          this.runtimeInterruptReason = reason
-          this.advanceStage(RenderStage.Dynamic)
-        }
+        // Always interrupt in the Runtime stage — this stage is specifically
+        // for prefetch segments where sync IO should error.
+        this.runtimeInterruptReason = reason
+        this.advanceStage(RenderStage.Dynamic)
         return
       }
       case RenderStage.Dynamic:
@@ -152,15 +190,22 @@ export class StagedRenderingController {
     //      (this might be a lazy intitialization of a module,
     //       so we still want to restart in this case and see if it still occurs)
     // In either case, we'll be doing another render after this one,
-    // so we only want to unblock the Runtime stage, not Dynamic, because
+    // so we only want to unblock the next stage, not Dynamic, because
     // unblocking the dynamic stage would likely lead to wasted (uncached) IO.
     const { currentStage } = this
     switch (currentStage) {
-      case RenderStage.Static: {
-        this.currentStage = RenderStage.Abandoned
-        this.resolveRuntimeStage()
-        return
+      case RenderStage.EarlyStatic: {
+        this.resolveStaticStage()
       }
+      // intentional fallthrough
+      case RenderStage.Static: {
+        this.resolveEarlyRuntimeStage()
+      }
+      // intentional fallthrough
+      case RenderStage.EarlyRuntime: {
+        this.resolveRuntimeStage()
+      }
+      // intentional fallthrough
       case RenderStage.Runtime: {
         this.currentStage = RenderStage.Abandoned
         return
@@ -176,7 +221,12 @@ export class StagedRenderingController {
   }
 
   advanceStage(
-    stage: RenderStage.Static | RenderStage.Runtime | RenderStage.Dynamic
+    stage:
+      | RenderStage.EarlyStatic
+      | RenderStage.Static
+      | RenderStage.EarlyRuntime
+      | RenderStage.Runtime
+      | RenderStage.Dynamic
   ) {
     // If we're already at the target stage or beyond, do nothing.
     // (this can happen e.g. if sync IO advanced us to the dynamic stage)
@@ -187,6 +237,16 @@ export class StagedRenderingController {
     let currentStage = this.currentStage
     this.currentStage = stage
 
+    if (currentStage < RenderStage.Static && stage >= RenderStage.Static) {
+      this.earlyStaticStageEndTime = performance.now() + performance.timeOrigin
+      this.resolveStaticStage()
+    }
+    if (
+      currentStage < RenderStage.EarlyRuntime &&
+      stage >= RenderStage.EarlyRuntime
+    ) {
+      this.resolveEarlyRuntimeStage()
+    }
     if (currentStage < RenderStage.Runtime && stage >= RenderStage.Runtime) {
       this.staticStageEndTime = performance.now() + performance.timeOrigin
       this.resolveRuntimeStage()
@@ -196,6 +256,26 @@ export class StagedRenderingController {
       this.resolveDynamicStage()
       return
     }
+  }
+
+  /** Fire the `onStage` listeners for the static stage and unblock any promises waiting for it. */
+  private resolveStaticStage() {
+    const staticListeners = this.staticStageListeners
+    for (let i = 0; i < staticListeners.length; i++) {
+      staticListeners[i]()
+    }
+    staticListeners.length = 0
+    this.staticStagePromise.resolve()
+  }
+
+  /** Fire the `onStage` listeners for the early runtime stage and unblock any promises waiting for it. */
+  private resolveEarlyRuntimeStage() {
+    const earlyRuntimeListeners = this.earlyRuntimeStageListeners
+    for (let i = 0; i < earlyRuntimeListeners.length; i++) {
+      earlyRuntimeListeners[i]()
+    }
+    earlyRuntimeListeners.length = 0
+    this.earlyRuntimeStagePromise.resolve()
   }
 
   /** Fire the `onStage` listeners for the runtime stage and unblock any promises waiting for it. */
@@ -218,8 +298,14 @@ export class StagedRenderingController {
     this.dynamicStagePromise.resolve()
   }
 
-  private getStagePromise(stage: NonStaticRenderStage): Promise<void> {
+  private getStagePromise(stage: AdvancableRenderStage): Promise<void> {
     switch (stage) {
+      case RenderStage.Static: {
+        return this.staticStagePromise.promise
+      }
+      case RenderStage.EarlyRuntime: {
+        return this.earlyRuntimeStagePromise.promise
+      }
       case RenderStage.Runtime: {
         return this.runtimeStagePromise.promise
       }
@@ -233,12 +319,12 @@ export class StagedRenderingController {
     }
   }
 
-  waitForStage(stage: NonStaticRenderStage) {
+  waitForStage(stage: AdvancableRenderStage) {
     return this.getStagePromise(stage)
   }
 
   delayUntilStage<T>(
-    stage: NonStaticRenderStage,
+    stage: AdvancableRenderStage,
     displayName: string | undefined,
     resolvedValue: T
   ) {

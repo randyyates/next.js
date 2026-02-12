@@ -219,7 +219,6 @@ import { ImageConfigContext } from '../../shared/lib/image-config-context.shared
 import { imageConfigDefault } from '../../shared/lib/image-config'
 import { RenderStage, StagedRenderingController } from './staged-rendering'
 import {
-  anySegmentHasRuntimePrefetchEnabled,
   isPageAllowedToBlock,
   anySegmentNeedsInstantValidation,
 } from './instant-validation/instant-config'
@@ -749,24 +748,19 @@ async function stagedRenderToReadableStreamWithoutCachesInDev(
   // which relies on mechanisms we've set up for staged rendering,
   // so we do a 2-task version (Static -> Dynamic) instead.
 
-  // We aren't doing any validation in this kind of render so we say there
-  // is not runtime prefetch regardless of whether there is or not
-  const hasRuntimePrefetch = false
-
   // We aren't filling caches so we don't need to abort this render, it'll
   // stream in a single pass
   const abortSignal = null
 
-  const stageController = new StagedRenderingController(
-    abortSignal,
-    hasRuntimePrefetch
-  )
+  const stageController = new StagedRenderingController(abortSignal)
   const environmentName = () => {
     const currentStage = stageController.currentStage
     switch (currentStage) {
       case RenderStage.Before:
+      case RenderStage.EarlyStatic:
       case RenderStage.Static:
         return 'Prerender'
+      case RenderStage.EarlyRuntime:
       case RenderStage.Runtime:
       case RenderStage.Dynamic:
       case RenderStage.Abandoned:
@@ -1341,8 +1335,7 @@ async function finalRuntimeServerPrerender(
   )
 
   const finalStageController = new StagedRenderingController(
-    finalServerController.signal,
-    true
+    finalServerController.signal
   )
 
   const finalServerPrerenderStore: PrerenderStoreModernRuntime = {
@@ -1366,7 +1359,7 @@ async function finalRuntimeServerPrerender(
     hmrRefreshHash: undefined,
     // TODO: Enable vary params tracking for runtime prefetches.
     varyParamsAccumulator: null,
-    // Used to separate the "Static" stage from the "Runtime" stage.
+    // Used to separate the stages in the 5-task pipeline.
     stagedRendering: finalStageController,
     // These are not present in regular prerenders, but allowed in a runtime prerender.
     headers,
@@ -1384,7 +1377,10 @@ async function finalRuntimeServerPrerender(
   let prerenderIsPending = true
   const result = await runInSequentialTasks(
     async () => {
-      // Static stage
+      // EarlyStatic stage: render begins.
+      // Non-prefetch segments render immediately.
+      // Prefetch segments are gated behind the RuntimePrefetchGate which
+      // awaits staticStagePromise.
       const prerenderResult = await workUnitAsyncStorage.run(
         finalServerPrerenderStore,
         ComponentMod.prerender,
@@ -1400,13 +1396,18 @@ async function finalRuntimeServerPrerender(
       return prerenderResult
     },
     () => {
-      // Advance to the runtime stage.
-      //
-      // We make runtime APIs hang during the first task (above), and unblock them in the following task (here).
-      // This makes sure that, at this point, we'll have finished all the static parts (what we'd prerender statically).
-      // We know that they don't contain any incorrect sync IO, because that'd have caused a build error.
-      // After we unblock Runtime APIs, if we encounter sync IO (e.g. `await cookies(); Date.now()`),
-      // we'll abort, but we'll produce at least as much output as a static prerender would.
+      // Advance to Static stage: unblock gate components so prefetch
+      // segments can begin rendering.
+      finalStageController.advanceStage(RenderStage.Static)
+    },
+    () => {
+      // Advance to EarlyRuntime stage: resolve early cookies/headers
+      // for non-prefetch segments.
+      finalStageController.advanceStage(RenderStage.EarlyRuntime)
+    },
+    () => {
+      // Advance to Runtime stage: resolve cookies/headers for prefetch
+      // segments.
       finalStageController.advanceStage(RenderStage.Runtime)
     },
     () => {
@@ -1549,6 +1550,7 @@ async function getRSCPayload(
     ctx,
     loaderTree: tree,
     parentParams: {},
+    parentRuntimePrefetchable: false,
     injectedCSS,
     injectedJS,
     injectedFontPreloadTags,
@@ -3236,20 +3238,9 @@ async function renderWithRestartOnCacheMissInDev(
   getPayload: (requestStore: RequestStore) => Promise<RSCPayload>,
   onError: (error: unknown) => void
 ) {
-  const {
-    htmlRequestId,
-    renderOpts,
-    componentMod: {
-      routeModule: {
-        userland: { loaderTree },
-      },
-    },
-  } = ctx
+  const { htmlRequestId, renderOpts } = ctx
 
   const { ComponentMod, setCacheStatus, setReactDebugChannel } = renderOpts
-
-  const hasRuntimePrefetch =
-    await anySegmentHasRuntimePrefetchEnabled(loaderTree)
 
   let startTime = -Infinity
 
@@ -3260,10 +3251,13 @@ async function renderWithRestartOnCacheMissInDev(
     const currentStage = requestStore.stagedRendering!.currentStage
     switch (currentStage) {
       case RenderStage.Before:
+      case RenderStage.EarlyStatic:
       case RenderStage.Static:
         return 'Prerender'
+      case RenderStage.EarlyRuntime:
+        return 'Prefetchable'
       case RenderStage.Runtime:
-        return hasRuntimePrefetch ? 'Prefetch' : 'Prefetchable'
+        return 'Prefetch'
       case RenderStage.Dynamic:
       case RenderStage.Abandoned:
         return 'Server'
@@ -3296,7 +3290,6 @@ async function renderWithRestartOnCacheMissInDev(
   const initialAbandonController = new AbortController() // Controls whether this render is abandoned
   const initialStageController = new StagedRenderingController(
     initialDataController.signal,
-    hasRuntimePrefetch,
     initialAbandonController
   )
 
@@ -3322,7 +3315,7 @@ async function renderWithRestartOnCacheMissInDev(
 
   const initialStreamResult = await runInSequentialTasks(
     () => {
-      initialStageController.advanceStage(RenderStage.Static)
+      initialStageController.advanceStage(RenderStage.EarlyStatic)
       startTime = performance.now() + performance.timeOrigin
 
       const streamPair = workUnitAsyncStorage
@@ -3356,6 +3349,20 @@ async function renderWithRestartOnCacheMissInDev(
           initialStageController,
           initialDataController.signal
         ),
+      }
+    },
+    () => {
+      if (cacheSignal.hasPendingReads()) {
+        initialAbandonController.abort()
+      } else {
+        initialStageController.advanceStage(RenderStage.Static)
+      }
+    },
+    () => {
+      if (cacheSignal.hasPendingReads()) {
+        initialAbandonController.abort()
+      } else {
+        initialStageController.advanceStage(RenderStage.EarlyRuntime)
       }
     },
     () => {
@@ -3421,10 +3428,7 @@ async function renderWithRestartOnCacheMissInDev(
   // We are going to render this pass all the way through because we've already
   // filled any caches so we won't be aborting this time.
   const abortSignal = null
-  const finalStageController = new StagedRenderingController(
-    abortSignal,
-    hasRuntimePrefetch
-  )
+  const finalStageController = new StagedRenderingController(abortSignal)
 
   // We've filled the caches, so now we can render as usual,
   // without any cache-filling mechanics.
@@ -3451,7 +3455,7 @@ async function renderWithRestartOnCacheMissInDev(
 
   const finalStreamResult = await runInSequentialTasks(
     () => {
-      finalStageController.advanceStage(RenderStage.Static)
+      finalStageController.advanceStage(RenderStage.EarlyStatic)
       startTime = performance.now() + performance.timeOrigin
 
       const streamPair = workUnitAsyncStorage
@@ -3478,6 +3482,14 @@ async function renderWithRestartOnCacheMissInDev(
           null
         ),
       }
+    },
+    () => {
+      // Static stage
+      finalStageController.advanceStage(RenderStage.Static)
+    },
+    () => {
+      // EarlyRuntime stage
+      finalStageController.advanceStage(RenderStage.EarlyRuntime)
     },
     () => {
       // Runtime stage
@@ -3546,9 +3558,11 @@ async function accumulateStreamChunks(
           throw new InvariantError(
             'Unexpected stream chunk while in Before stage'
           )
+        case RenderStage.EarlyStatic:
         case RenderStage.Static:
           staticChunks.push(value)
         // fall through
+        case RenderStage.EarlyRuntime:
         case RenderStage.Runtime:
           runtimeChunks.push(value)
         // fall through
@@ -3578,9 +3592,14 @@ function createAsyncApiPromisesInDev(
   headers: RequestStore['headers']
 ): NonNullable<RequestStore['asyncApiPromises']> {
   return {
-    // Runtime APIs
+    // Runtime APIs (for prefetch segments)
     cookies: stagedRendering.delayUntilStage(
       RenderStage.Runtime,
+      'cookies',
+      cookies
+    ),
+    earlyCookies: stagedRendering.delayUntilStage(
+      RenderStage.EarlyRuntime,
       'cookies',
       cookies
     ),
@@ -3589,8 +3608,18 @@ function createAsyncApiPromisesInDev(
       'cookies',
       mutableCookies as RequestStore['cookies']
     ),
+    earlyMutableCookies: stagedRendering.delayUntilStage(
+      RenderStage.EarlyRuntime,
+      'cookies',
+      mutableCookies as RequestStore['cookies']
+    ),
     headers: stagedRendering.delayUntilStage(
       RenderStage.Runtime,
+      'headers',
+      headers
+    ),
+    earlyHeaders: stagedRendering.delayUntilStage(
+      RenderStage.EarlyRuntime,
       'headers',
       headers
     ),
@@ -3600,8 +3629,18 @@ function createAsyncApiPromisesInDev(
       undefined,
       '<internal params>'
     ),
+    earlySharedParamsParent: stagedRendering.delayUntilStage(
+      RenderStage.EarlyRuntime,
+      undefined,
+      '<internal params>'
+    ),
     sharedSearchParamsParent: stagedRendering.delayUntilStage(
       RenderStage.Runtime,
+      undefined,
+      '<internal searchParams>'
+    ),
+    earlySharedSearchParamsParent: stagedRendering.delayUntilStage(
+      RenderStage.EarlyRuntime,
       undefined,
       '<internal searchParams>'
     ),

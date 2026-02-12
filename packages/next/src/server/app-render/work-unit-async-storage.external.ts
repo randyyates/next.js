@@ -78,12 +78,22 @@ export interface RequestStore extends CommonWorkUnitStore {
 
 type DevAsyncApiPromises = {
   cookies: Promise<ReadonlyRequestCookies>
+  earlyCookies: Promise<ReadonlyRequestCookies>
+
   mutableCookies: Promise<ReadonlyRequestCookies>
+  earlyMutableCookies: Promise<ReadonlyRequestCookies>
+
   headers: Promise<ReadonlyHeaders>
+  earlyHeaders: Promise<ReadonlyHeaders>
 
   sharedParamsParent: Promise<string>
-  sharedSearchParamsParent: Promise<string>
+  earlySharedParamsParent: Promise<string>
 
+  sharedSearchParamsParent: Promise<string>
+  earlySharedSearchParamsParent: Promise<string>
+
+  // Connection is not a runtime promise and doesn't
+  // need to distinguish between early and late
   connection: Promise<undefined>
 }
 

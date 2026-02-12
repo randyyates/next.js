@@ -1151,14 +1151,36 @@ export function getNavigationDisallowedDynamicReasons(
   return []
 }
 
+/**
+ * Delays until the appropriate runtime stage based on the current stage of
+ * the rendering pipeline:
+ *
+ * - Stage in {EarlyStatic, EarlyRuntime} → wait for EarlyRuntime stage
+ *   (for non-prefetch segments that render in the "early" stages)
+ * - Stage in {Static, Runtime, Dynamic} → wait for Runtime stage
+ *   (for prefetch segments that render in the "normal" stages)
+ *
+ * This ensures that cookies()/headers()/etc. resolve at the right time for
+ * each segment type.
+ */
 export function delayUntilRuntimeStage<T>(
   prerenderStore: PrerenderStoreModernRuntime,
   result: Promise<T>
 ): Promise<T> {
-  if (prerenderStore.stagedRendering) {
-    return prerenderStore.stagedRendering
-      .waitForStage(RenderStage.Runtime)
+  const { stagedRendering } = prerenderStore
+  if (!stagedRendering) {
+    return result
+  }
+  const { currentStage } = stagedRendering
+  if (
+    currentStage === RenderStage.EarlyStatic ||
+    currentStage === RenderStage.EarlyRuntime
+  ) {
+    // Non-prefetch segments: use the early runtime promise
+    return stagedRendering
+      .waitForStage(RenderStage.EarlyRuntime)
       .then(() => result)
   }
-  return result
+  // Prefetch segments or routes without early stages: use the normal runtime promise
+  return stagedRendering.waitForStage(RenderStage.Runtime).then(() => result)
 }

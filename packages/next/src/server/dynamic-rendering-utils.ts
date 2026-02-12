@@ -1,4 +1,4 @@
-import type { NonStaticRenderStage } from './app-render/staged-rendering'
+import type { AdvancableRenderStage } from './app-render/staged-rendering'
 import type { RequestStore } from './app-render/work-unit-async-storage.external'
 
 export function isHangingPromiseRejectionError(
@@ -79,7 +79,7 @@ function ignoreReject() {}
 export function makeDevtoolsIOAwarePromise<T>(
   underlying: T,
   requestStore: RequestStore,
-  stage: NonStaticRenderStage
+  stage: AdvancableRenderStage
 ): Promise<T> {
   if (requestStore.stagedRendering) {
     // We resolve each stage in a timeout, so React DevTools will pick this up as IO.
