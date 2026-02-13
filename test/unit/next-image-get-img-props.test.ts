@@ -6,8 +6,14 @@ let deploymentId
 jest.mock('next/dist/shared/lib/deployment-id.js', () => {
   return {
     __esModule: true,
-    getDeploymentId() {
+    getImmutableAssetToken() {
       return deploymentId
+    },
+    getImmutableAssetTokenQuery(ampersand = false) {
+      if (deploymentId) {
+        return `${ampersand ? '&' : '?'}dpl=${deploymentId}`
+      }
+      return ''
     },
   }
 })

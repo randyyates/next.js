@@ -232,7 +232,8 @@ function getFilesForRoute(
       scripts: allFiles
         .filter((v) => v.endsWith('.js'))
         .map(
-          (v) => __unsafeCreateTrustedScriptURL(v) + getImmutableAssetTokenQuery()
+          (v) =>
+            __unsafeCreateTrustedScriptURL(v) + getImmutableAssetTokenQuery()
         ),
       css: allFiles
         .filter((v) => v.endsWith('.css'))
