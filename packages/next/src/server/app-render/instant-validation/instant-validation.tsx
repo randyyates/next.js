@@ -9,10 +9,7 @@ import type { VaryParamsThenable } from '../../../shared/lib/segment-cache/vary-
 import { InvariantError } from '../../../shared/lib/invariant-error'
 import { RenderStage } from '../staged-rendering'
 import { getServerModuleMap } from '../manifests-singleton'
-import {
-  runInSequentialTasks,
-  scheduleInSequentialTasks,
-} from '../app-render-render-utils'
+import { runInSequentialTasks } from '../app-render-render-utils'
 import { workAsyncStorage } from '../work-async-storage.external'
 import {
   Phase,
@@ -680,9 +677,9 @@ export async function createCombinedPayloadStream(
   const debugChunks: Uint8Array[] | null = isDebugChannelEnabled ? [] : null
   const debugChannel = isDebugChannelEnabled ? createDebugChannel() : null
 
-  let streamFinished: Promise<any> = null!
+  let streamFinished: Promise<any>
 
-  await scheduleInSequentialTasks(
+  await runInSequentialTasks(
     () => {
       const stream = renderToReadableStream(
         payload,
@@ -738,7 +735,7 @@ export async function createCombinedPayloadStream(
     }
   )
 
-  await streamFinished
+  await streamFinished!
 
   return {
     stream: createNodeStreamWithLateRelease(
