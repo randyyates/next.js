@@ -635,6 +635,7 @@ export default class NextNodeServer extends BaseServer<
           this.getServerComponentsHmrCache(),
           {
             buildId: this.buildId,
+            deploymentId: this.deploymentId,
             immutableAssetToken:
               this.nextConfig.experimental.immutableAssetToken ??
               this.deploymentId,
@@ -652,6 +653,7 @@ export default class NextNodeServer extends BaseServer<
           renderOpts as LoadedRenderOpts<PagesModule>,
           {
             buildId: this.buildId,
+            deploymentId: this.deploymentId,
             immutableAssetToken:
               this.nextConfig.experimental.immutableAssetToken ??
               this.deploymentId,

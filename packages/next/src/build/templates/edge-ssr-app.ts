@@ -84,6 +84,7 @@ async function requestHandler(
     resolvedPathname,
     interceptionRoutePatterns,
     routerServerContext,
+    deploymentId,
     immutableAssetToken,
   } = prepareResult
 
@@ -107,6 +108,7 @@ async function requestHandler(
     sharedContext: {
       buildId,
       deploymentId,
+      immutableAssetToken,
     },
     fallbackRouteParams: null,
 

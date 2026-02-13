@@ -651,6 +651,7 @@ export async function handler(
         page: normalizedSrcPage,
         sharedContext: {
           buildId,
+          deploymentId,
           immutableAssetToken,
         },
         serverComponentsHmrCache: getRequestMeta(

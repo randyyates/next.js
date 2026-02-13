@@ -1,6 +1,6 @@
 import type { ImageLoaderPropsWithConfig } from './image-config'
 import { findClosestQuality } from './find-closest-quality'
-import { getDeploymentId } from './deployment-id'
+import { getImmutableAssetToken } from './deployment-id'
 
 function defaultLoader({
   config,
@@ -27,7 +27,8 @@ function defaultLoader({
   }
 
   // Extract dpl parameter early so validation uses the clean URL
-  let deploymentId = getDeploymentId()
+  // TODO is this the right id?
+  let deploymentId = getImmutableAssetToken()
   if (src.startsWith('/')) {
     const srcUrl = new URL(src, 'http://n')
     const srcDpl = srcUrl.searchParams.get('dpl')
