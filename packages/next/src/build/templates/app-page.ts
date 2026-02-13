@@ -181,6 +181,7 @@ export async function handler(
     nextConfig,
     parsedUrl,
     interceptionRoutePatterns,
+    deploymentId,
     immutableAssetToken,
   } = prepareResult
 
@@ -650,7 +651,7 @@ export async function handler(
         page: normalizedSrcPage,
         sharedContext: {
           buildId,
-          deploymentId,
+          immutableAssetToken,
         },
         serverComponentsHmrCache: getRequestMeta(
           req,
