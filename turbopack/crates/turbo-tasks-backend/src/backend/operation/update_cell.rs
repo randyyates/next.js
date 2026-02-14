@@ -55,8 +55,10 @@ impl UpdateCellOperation {
         content: CellContent,
         is_serializable_cell_content: bool,
         updated_key_hashes: Option<SmallVec<[u64; 2]>>,
-        #[cfg(feature = "verify_determinism")] verification_mode: VerificationMode,
-        #[cfg(not(feature = "verify_determinism"))] _verification_mode: VerificationMode,
+        #[cfg(feature = "verify_determinism")]
+        verification_mode: turbo_tasks::backend::VerificationMode,
+        #[cfg(not(feature = "verify_determinism"))]
+        _verification_mode: turbo_tasks::backend::VerificationMode,
         mut ctx: impl ExecuteContext<'_>,
     ) {
         let content = if let CellContent(Some(new_content)) = content {
@@ -80,11 +82,14 @@ impl UpdateCellOperation {
 
                 // Check if this assumption holds.
                 #[cfg(feature = "verify_determinism")]
-                if !is_stateful
-                    && matches!(verification_mode, VerificationMode::EqualityCheck)
+                if !task.stateful()
+                    && matches!(
+                        verification_mode,
+                        turbo_tasks::backend::VerificationMode::EqualityCheck
+                    )
                     && content != task.get_cell_data(is_serializable_cell_content, cell)
                 {
-                    let task_description = ctx.get_task_description(task_id);
+                    let task_description = task.get_task_description();
                     let cell_type = turbo_tasks::registry::get_value_type(cell.type_id).global_name;
                     eprintln!(
                         "Task {} updated cell #{} (type: {}) while recomputing",
