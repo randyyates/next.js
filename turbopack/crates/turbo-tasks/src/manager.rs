@@ -518,6 +518,11 @@ struct CurrentTaskState {
     execution_id: ExecutionId,
     priority: TaskPriority,
 
+    /// True if the current task has state in cells (interior mutability).
+    /// Only tracked when verify_determinism feature is enabled.
+    #[cfg(feature = "verify_determinism")]
+    stateful: bool,
+
     /// True if the current task uses an external invalidator
     has_invalidator: bool,
 
@@ -541,6 +546,8 @@ impl CurrentTaskState {
             task_id: Some(task_id),
             execution_id,
             priority,
+            #[cfg(feature = "verify_determinism")]
+            stateful: false,
             has_invalidator: false,
             cell_counters: Some(AutoMap::default()),
             local_tasks: Vec::new(),
@@ -553,6 +560,8 @@ impl CurrentTaskState {
             task_id: None,
             execution_id,
             priority,
+            #[cfg(feature = "verify_determinism")]
+            stateful: false,
             has_invalidator: false,
             cell_counters: None,
             local_tasks: Vec::new(),
@@ -1142,6 +1151,16 @@ impl<B: Backend + 'static> TurboTasks<B> {
     }
 
     fn finish_current_task_state(&self) -> FinishedTaskState {
+        #[cfg(feature = "verify_determinism")]
+        let (stateful, has_invalidator) = CURRENT_TASK_STATE.with(|cell| {
+            let CurrentTaskState {
+                stateful,
+                has_invalidator,
+                ..
+            } = &mut *cell.write().unwrap();
+            (*stateful, *has_invalidator)
+        });
+        #[cfg(not(feature = "verify_determinism"))]
         let has_invalidator = CURRENT_TASK_STATE.with(|cell| {
             let CurrentTaskState {
                 has_invalidator, ..
@@ -1149,7 +1168,11 @@ impl<B: Backend + 'static> TurboTasks<B> {
             *has_invalidator
         });
 
-        FinishedTaskState { has_invalidator }
+        FinishedTaskState {
+            #[cfg(feature = "verify_determinism")]
+            stateful,
+            has_invalidator,
+        }
     }
 
     pub fn backend(&self) -> &B {
@@ -1208,6 +1231,12 @@ impl<B: Backend> Executor<TurboTasks<B>, ScheduledTask, TaskPriority> for TurboT
                                     Err(err) => Err(TurboTasksExecutionError::Panic(Arc::new(err))),
                                 };
 
+                                #[cfg(feature = "verify_determinism")]
+                                let FinishedTaskState {
+                                    stateful,
+                                    has_invalidator,
+                                } = this.finish_current_task_state();
+                                #[cfg(not(feature = "verify_determinism"))]
                                 let FinishedTaskState { has_invalidator } =
                                     this.finish_current_task_state();
                                 let cell_counters = CURRENT_TASK_STATE
@@ -1216,6 +1245,8 @@ impl<B: Backend> Executor<TurboTasks<B>, ScheduledTask, TaskPriority> for TurboT
                                     task_id,
                                     result,
                                     &cell_counters,
+                                    #[cfg(feature = "verify_determinism")]
+                                    stateful,
                                     has_invalidator,
                                     &*this,
                                 )
@@ -1310,6 +1341,11 @@ impl<B: Backend> Executor<TurboTasks<B>, ScheduledTask, TaskPriority> for TurboT
 }
 
 struct FinishedTaskState {
+    /// True if the task has state in cells (interior mutability).
+    /// Only tracked when verify_determinism feature is enabled.
+    #[cfg(feature = "verify_determinism")]
+    stateful: bool,
+
     /// True if the task uses an external invalidator
     has_invalidator: bool,
 }
@@ -1849,10 +1885,22 @@ pub fn mark_finished() {
 }
 
 /// Returns a [`SerializationInvalidator`] that can be used to invalidate the
-/// serialization of the current task cells
+/// serialization of the current task cells.
+///
+/// Also marks the current task as stateful when the `verify_determinism` feature is enabled,
+/// since State allocation implies interior mutability.
 pub fn get_serialization_invalidator() -> SerializationInvalidator {
     CURRENT_TASK_STATE.with(|cell| {
-        let CurrentTaskState { task_id, .. } = &mut *cell.write().unwrap();
+        let CurrentTaskState {
+            task_id,
+            #[cfg(feature = "verify_determinism")]
+            stateful,
+            ..
+        } = &mut *cell.write().unwrap();
+        #[cfg(feature = "verify_determinism")]
+        {
+            *stateful = true;
+        }
         let Some(task_id) = *task_id else {
             panic!(
                 "get_serialization_invalidator() can only be used in the context of a turbo_tasks \
@@ -1870,6 +1918,24 @@ pub fn mark_invalidator() {
         } = &mut *cell.write().unwrap();
         *has_invalidator = true;
     })
+}
+
+/// Marks the current task as stateful. This is used to indicate that the task
+/// has interior mutability (e.g., via State or TransientState), which means
+/// the task may produce different outputs even with the same inputs.
+///
+/// Only has an effect when the `verify_determinism` feature is enabled.
+#[cfg(feature = "verify_determinism")]
+pub fn mark_stateful() {
+    CURRENT_TASK_STATE.with(|cell| {
+        let CurrentTaskState { stateful, .. } = &mut *cell.write().unwrap();
+        *stateful = true;
+    })
+}
+
+#[cfg(not(feature = "verify_determinism"))]
+pub fn mark_stateful() {
+    // No-op when verify_determinism is not enabled
 }
 
 pub fn prevent_gc() {
